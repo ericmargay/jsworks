@@ -4,13 +4,8 @@ const txtCopy = document.querySelectorAll('.link');
 btnCopy.forEach((btnCopy_f, index) => {
 	btnCopy_f.addEventListener('click', function handleClick() {
 		console.log(index);
-		console.log(txtCopy.innerText);
-
-
-
-
-
-        // btnCopy_f.clipboard.writeText(txtCopy.innerText[index]);
+		console.log(txtCopy[index].innerText);
+        btnCopy_f.clipboard.writeText(txtCopy[index].innerText);
 
 
 	})
