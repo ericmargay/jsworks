@@ -1,0 +1,91 @@
+@import url("https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;700&display=swap");
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Variables */
+
+:root {
+  --blue: #355070;
+  --violet: #6d597a;
+  --roseDust: #b56576;
+  --pink: #e56b6f;
+  --lightBrown: #eaac8b;
+}
+
+html {
+  font-size: 62.5%;
+}
+
+body {
+  padding: 2rem;
+  background: var(--blue);
+  font-family: 'Source Sans Pro', Arial, sans-serif;
+  font-size: 1.6rem;
+}
+
+h1 {
+  font-size: 3rem;
+  color: var(--lightBrown);
+  display: flex;
+  justify-content: center;
+}
+
+.content {
+  margin: 5rem 0 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.content h2 {
+  margin-bottom: 3rem;
+  color: white;
+  font-weight: 300;
+}
+
+.content .box {
+  margin-bottom: 4.5rem;
+  position: relative;
+}
+
+.content .box h3 {
+  margin-bottom: 1rem;
+  color: white;
+  font-weight: 400;
+}
+
+.content .box code {
+  padding: 1rem 2rem;
+  display: block;
+  border-radius: 5rem;
+  background: var(--pink);
+}
+
+.content .box button {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 5rem;
+  border: none;
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: white;
+  box-shadow: 0 .5rem .5rem rgba(0, 0, 0, .2 );
+  transition: transform .2s ease-out;
+}
+
+.content .box button:hover {
+  transform: translateY(-1rem);
+  cursor: pointer;
+}
+
+.content .box button i {
+  color: var(--violet);
+}
+
+
+
