@@ -5,7 +5,7 @@ btnCopy.forEach((btnCopy_f, index) => {
 	btnCopy_f.addEventListener('click', function handleClick() {
 		console.log(index);
 		console.log(txtCopy[index].innerText);
-        btnCopy_f.clipboard.writeText(txtCopy[index].innerText);
+        navigator.clipboard.writeText(txtCopy[index].innerText);
 
 
 	})
