@@ -1,7 +1,6 @@
-<!DOCTYPE html>
 <html lang="en">
 	<head>
-		<title>three.js webgpu - compute geometry</title>
+		<title>three.js webgpu - compute particles</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
 		<link type="text/css" rel="stylesheet" href="example.css">
@@ -12,10 +11,10 @@
 			<a href="https://threejs.org/" target="_blank" rel="noopener" class="logo-link"></a>
 
 			<div class="title-wrapper">
-				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Compute Geometry</span>
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Compute Particles</span>
 			</div>
 
-			<small>Jelly deformation with compute shaders. Move pointer to interact.</small>
+			<small>500k Particles.</small>
 		</div>
 
 		<script type="importmap">
@@ -32,144 +31,127 @@
 		<script type="module">
 
 			import * as THREE from 'three/webgpu';
-			import { vec4, storage, Fn, If, uniform, instanceIndex, objectWorldMatrix, color, screenUV, attribute } from 'three/tsl';
-
-			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-
-			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { Fn, If, uniform, float, uv, vec3, hash, shapeCircle,
+				instancedArray, instanceIndex } from 'three/tsl';
 
 			import { Inspector } from 'three/addons/inspector/Inspector.js';
 
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+			const particleCount = 200000;
+
+			const gravity = uniform( - .00098 );
+			const bounce = uniform( .8 );
+			const friction = uniform( .99 );
+			const size = uniform( .12 );
+
+			const clickPosition = uniform( new THREE.Vector3() );
+
 			let camera, scene, renderer;
-			let raycaster, pointer;
+			let controls;
+			let computeParticles;
 
-			let mesh;
-
-			const pointerPosition = uniform( vec4( 0 ) );
-			const elasticity = uniform( .4 ); // elasticity ( how "strong" the spring is )
-			const damping = uniform( .94 ); // damping factor ( energy loss )
-			const brushSize = uniform( .25 );
-			const brushStrength = uniform( .22 );
+			let isOrbitControlsActive;
 
 			init();
 
-			const jelly = Fn( ( { renderer, geometry, object } ) => {
+			async function init() {
 
-				const count = geometry.attributes.position.count;
+				const { innerWidth, innerHeight } = window;
 
-				// Create storage buffer attribute for modified position.
+				camera = new THREE.PerspectiveCamera( 50, innerWidth / innerHeight, .1, 1000 );
+				camera.position.set( 0, 5, 20 );
 
-				const positionBaseAttribute = geometry.attributes.position;
-				const positionStorageBufferAttribute = new THREE.StorageBufferAttribute( count, 3 );
-				const speedBufferAttribute = new THREE.StorageBufferAttribute( count, 3 );
-
-				geometry.setAttribute( 'storagePosition', positionStorageBufferAttribute );
-
-				// Attributes
-
-				const positionAttribute = storage( positionBaseAttribute, 'vec3', count );
-				const positionStorageAttribute = storage( positionStorageBufferAttribute, 'vec3', count );
-
-				const speedAttribute = storage( speedBufferAttribute, 'vec3', count );
-
-				// Vectors
-
-				// Base vec3 position of the mesh vertices.
-				const basePosition = positionAttribute.element( instanceIndex );
-				// Mesh vertices after compute modification.
-				const currentPosition = positionStorageAttribute.element( instanceIndex );
-				// Speed of each mesh vertex.
-				const currentSpeed = speedAttribute.element( instanceIndex );
+				scene = new THREE.Scene();
 
 				//
 
+				const positions = instancedArray( particleCount, 'vec3' );
+				const velocities = instancedArray( particleCount, 'vec3' );
+				const colors = instancedArray( particleCount, 'vec3' );
+
+				// compute
+
+				const separation = 0.2;
+				const amount = Math.sqrt( particleCount );
+				const offset = float( amount / 2 );
+
 				const computeInit = Fn( () => {
 
-					// Modified storage position starts out the same as the base position.
+					const position = positions.element( instanceIndex );
+					const color = colors.element( instanceIndex );
 
-					currentPosition.assign( basePosition );
+					const x = instanceIndex.mod( amount );
+					const z = instanceIndex.div( amount );
 
-				} )().compute( count );
+					position.x = offset.sub( x ).mul( separation );
+					position.z = offset.sub( z ).mul( separation );
+
+					color.x = hash( instanceIndex );
+					color.y = hash( instanceIndex.add( 2 ) );
+
+				} )().compute( particleCount ).setName( 'Init Particles' );
 
 				//
 
 				const computeUpdate = Fn( () => {
 
-					// pinch
+					const position = positions.element( instanceIndex );
+					const velocity = velocities.element( instanceIndex );
 
-					If( pointerPosition.w.equal( 1 ), () => {
+					velocity.addAssign( vec3( 0.00, gravity, 0.00 ) );
+					position.addAssign( velocity );
 
-						const worldPosition = objectWorldMatrix( object ).mul( currentPosition );
+					velocity.mulAssign( friction );
 
-						const dist = worldPosition.distance( pointerPosition.xyz );
-						const direction = pointerPosition.xyz.sub( worldPosition ).normalize();
+					// floor
 
-						const power = brushSize.sub( dist ).max( 0 ).mul( brushStrength );
+					If( position.y.lessThan( 0 ), () => {
 
-						currentPosition.addAssign( direction.mul( power ) );
+						position.y = 0;
+						velocity.y = velocity.y.negate().mul( bounce );
+
+						// floor friction
+
+						velocity.x = velocity.x.mul( .9 );
+						velocity.z = velocity.z.mul( .9 );
 
 					} );
 
-					// compute ( jelly )
+				} );
 
-					const distance = basePosition.distance( currentPosition );
-					const force = elasticity.mul( distance ).mul( basePosition.sub( currentPosition ) );
+				computeParticles = computeUpdate().compute( particleCount ).setName( 'Update Particles' );
 
-					currentSpeed.addAssign( force );
-					currentSpeed.mulAssign( damping );
+				// create particles
 
-					currentPosition.addAssign( currentSpeed );
+				const material = new THREE.SpriteNodeMaterial();
+				material.colorNode = uv().mul( colors.element( instanceIndex ) );
+				material.positionNode = positions.toAttribute();
+				material.scaleNode = size;
+				material.opacityNode = shapeCircle();
+				material.alphaToCoverage = true;
+				material.transparent = true;
 
-				} )().compute( count ).setName( 'Update Jelly' );
-
-				// initialize the storage buffer with the base position
-
-				computeUpdate.onInit( () => renderer.compute( computeInit ) );
+				const particles = new THREE.Sprite( material );
+				particles.count = particleCount;
+				particles.frustumCulled = false;
+				scene.add( particles );
 
 				//
 
-				return computeUpdate;
+				const helper = new THREE.GridHelper( 90, 45, 0x303030, 0x303030 );
+				scene.add( helper );
 
-			} );
+				const geometry = new THREE.PlaneGeometry( 200, 200 );
+				geometry.rotateX( - Math.PI / 2 );
 
-			function init() {
+				const plane = new THREE.Mesh( geometry, new THREE.MeshBasicMaterial( { visible: false } ) );
+				scene.add( plane );
 
-				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 10 );
-				camera.position.set( 0, 0, 1 );
+				const raycaster = new THREE.Raycaster();
+				const pointer = new THREE.Vector2();
 
-				scene = new THREE.Scene();
-
-				raycaster = new THREE.Raycaster();
-				pointer = new THREE.Vector2();
-
-				// background
-
-				const bgColor = screenUV.y.mix( color( 0x9f87f7 ), color( 0xf2cdcd ) );
-				const bgVignette = screenUV.distance( .5 ).remapClamp( 0.3, .8 ).oneMinus();
-				const bgIntensity = 4;
-
-				scene.backgroundNode = bgColor.mul( bgVignette.mul( color( 0xa78ff6 ).mul( bgIntensity ) ) );
-
-				// model
-
-				new GLTFLoader().load( 'models/gltf/LeePerrySmith/LeePerrySmith.glb', function ( gltf ) {
-
-					// create jelly effect material
-
-					const material = new THREE.MeshNormalNodeMaterial();
-					material.geometryNode = jelly();
-					material.positionNode = attribute( 'storagePosition' );
-
-					// apply the material to the mesh
-
-					mesh = gltf.scene.children[ 0 ];
-					mesh.scale.setScalar( .1 );
-					mesh.material = material;
-					scene.add( mesh );
-
-				} );
-
-				// renderer
+				//
 
 				renderer = new THREE.WebGPURenderer( { antialias: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
@@ -178,55 +160,117 @@
 				renderer.inspector = new Inspector();
 				document.body.appendChild( renderer.domElement );
 
-				const controls = new OrbitControls( camera, renderer.domElement );
-				controls.minDistance = .7;
-				controls.maxDistance = 2;
+				await renderer.init();
 
-				const gui = renderer.inspector.createParameters( 'Settings' );
-				gui.add( elasticity, 'value', 0, .5 ).name( 'elasticity' );
-				gui.add( damping, 'value', .9, .98 ).name( 'damping' );
-				gui.add( brushSize, 'value', .1, .5 ).name( 'brush size' );
-				gui.add( brushStrength, 'value', .1, .3 ).name( 'brush strength' );
+				//
 
-				window.addEventListener( 'resize', onWindowResize );
-				window.addEventListener( 'pointermove', onPointerMove );
+				renderer.compute( computeInit );
 
-			}
+				// Hit
 
-			function onPointerMove( event ) {
+				const computeHit = Fn( () => {
 
-				pointer.set( ( event.clientX / window.innerWidth ) * 2 - 1, - ( event.clientY / window.innerHeight ) * 2 + 1 );
+					const position = positions.element( instanceIndex );
+					const velocity = velocities.element( instanceIndex );
 
-				raycaster.setFromCamera( pointer, camera );
+					const dist = position.distance( clickPosition );
+					const direction = position.sub( clickPosition ).normalize();
+					const distArea = float( 3 ).sub( dist ).max( 0 );
 
-				const intersects = raycaster.intersectObject( scene );
+					const power = distArea.mul( .01 );
+					const relativePower = power.mul( hash( instanceIndex ).mul( 1.5 ).add( .5 ) );
 
-				if ( intersects.length > 0 ) {
+					velocity.assign( velocity.add( direction.mul( relativePower ) ) );
 
-					const intersect = intersects[ 0 ];
+				} )().compute( particleCount ).setName( 'Hit Particles' );
 
-					pointerPosition.value.copy( intersect.point );
-					pointerPosition.value.w = 1; // enable
+				//
 
-				} else {
+				function onMove( event ) {
 
-					pointerPosition.value.w = 0; // disable
+					if ( isOrbitControlsActive ) return;
+
+					pointer.set( ( event.clientX / window.innerWidth ) * 2 - 1, - ( event.clientY / window.innerHeight ) * 2 + 1 );
+
+					raycaster.setFromCamera( pointer, camera );
+
+					const intersects = raycaster.intersectObject( plane, false );
+
+					if ( intersects.length > 0 ) {
+
+						const { point } = intersects[ 0 ];
+
+						// move to uniform
+
+						clickPosition.value.copy( point );
+						clickPosition.value.y = - 1;
+
+						// compute
+
+						renderer.compute( computeHit );
+
+					}
 
 				}
+
+				renderer.domElement.addEventListener( 'pointermove', onMove );
+
+				// controls
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.enableDamping = true;
+				controls.minDistance = 5;
+				controls.maxDistance = 200;
+				controls.target.set( 0, - 8, 0 );
+				controls.update();
+
+				controls.addEventListener( 'start', () => {
+
+					isOrbitControlsActive = true;
+
+				} );
+				controls.addEventListener( 'end', () => {
+
+					isOrbitControlsActive = false;
+
+				} );
+
+				controls.touches = {
+					ONE: null,
+					TWO: THREE.TOUCH.DOLLY_PAN
+				};
+
+				//
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				// gui
+
+				const gui = renderer.inspector.createParameters( 'Settings' );
+
+				gui.add( gravity, 'value', - .0098, 0, 0.0001 ).name( 'gravity' );
+				gui.add( bounce, 'value', .1, 1, 0.01 ).name( 'bounce' );
+				gui.add( friction, 'value', .96, .99, 0.01 ).name( 'friction' );
+				gui.add( size, 'value', .12, .5, 0.01 ).name( 'size' );
 
 			}
 
 			function onWindowResize() {
 
-				camera.aspect = window.innerWidth / window.innerHeight;
+				const { innerWidth, innerHeight } = window;
+
+				camera.aspect = innerWidth / innerHeight;
 				camera.updateProjectionMatrix();
 
-				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setSize( innerWidth, innerHeight );
 
 			}
 
-			async function animate() {
+			function animate() {
 
+				controls.update();
+
+				renderer.compute( computeParticles );
 				renderer.render( scene, camera );
 
 			}
